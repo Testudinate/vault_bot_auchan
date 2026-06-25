@@ -114,12 +114,31 @@ function mapColumns(headerRow) {
   };
 }
 
-// Похоже ли значение на DNS-имя (а не на IP/пусто/email)
+// Очистка кандидата в DNS: берём часть до " - ", переноса строки, ';'
+function cleanDns(v) {
+  return String(v == null ? '' : v).split(/\n|;|\s-\s/)[0].replace(/ /g, ' ').trim();
+}
+
+// Значения, которые НЕ являются DNS (тип/протокол/роль/заголовки разделов)
+const DNS_BLOCK = new Set([
+  'https', 'http', 'web', 'app', 'app / all in one', 'all in one', 'file server',
+  'kafka transfer', 'src nat', 'dst nat', 'balancer', 'nat', 'n/a', 'na', '-', '—',
+]);
+
+// Похоже ли значение на DNS-имя сервера (буквы+цифры без пробелов, либо домен с точкой)
 function looksLikeDns(v) {
-  const s = String(v || '').trim();
-  if (!s || isIp(s)) return false;
-  if (s.includes('@')) return false;
-  return /[a-zа-я]/i.test(s) && s.length > 2;
+  const s = cleanDns(v);
+  if (!s || isIp(s) || s.includes('@')) return false;
+  const low = s.toLowerCase();
+  if (DNS_BLOCK.has(low)) return false;
+  if (/^\d+[.)]\s/.test(s)) return false;                 // «2. ...» — заголовок раздела
+  if (/компоненты и адреса|описание ис/i.test(s)) return false;
+  const core = s.replace(/\s+/g, '');
+  // hostname: буквы И цифры, длина >= 5 (proxy_dmz_240_0, lnxcrud157ap173, csru262ap119)
+  if (/^[a-z0-9._-]+$/i.test(core) && /[a-z]/i.test(core) && /\d/.test(core) && core.length >= 5) return true;
+  // либо доменное имя с точкой и TLD
+  if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(core)) return true;
+  return false;
 }
 
 // ── Индексация одного РФ-файла: IP → данные ──
@@ -146,7 +165,7 @@ function indexRfFile(buffer) {
             // приоритет: соседняя ячейка слева/справа, затем любая hostname-подобная
             const candidates = [row[ci - 1], row[ci + 1], row[3], row[2], ...row];
             for (const c of candidates) {
-              if (looksLikeDns(c)) { dns = String(c).trim(); break; }
+              if (looksLikeDns(c)) { dns = cleanDns(c); break; }
             }
             if (dns) out.dnsByIp.set(ip, dns);
           }
@@ -162,23 +181,36 @@ function indexRfFile(buffer) {
     for (const row of sheetRows(wb.Sheets[sheetName])) allRows.push(row);
   }
 
+  // Значение является заголовком раздела (не данными)?
+  const isSectionHeader = (v) => /^\s*\d+[.)]\s|компоненты и адреса|описание ис|общие сведения|сетев(ые|ое)/i.test(v);
+
   const valueAfterLabel = (labelRe, maxRows = 120) => {
     for (let r = 0; r < Math.min(allRows.length, maxRows); r++) {
       const idx = allRows[r].findIndex(c => labelRe.test(String(c)));
       if (idx >= 0) {
         for (let ci = idx + 1; ci < allRows[r].length; ci++) {
-          const val = String(allRows[r][ci]).trim();
-          if (val && val.length > 1 && !labelRe.test(val)) return val;
+          const val = String(allRows[r][ci]).replace(/ /g, ' ').trim();
+          if (val && val.length > 1 && !labelRe.test(val) && !isSectionHeader(val)) return val;
         }
       }
     }
     return '';
   };
 
-  out.is          = valueAfterLabel(/Название ИС|Name of.*system|IS name|Описание ИС/i);
-  out.solution    = valueAfterLabel(/Solu[QО]iq|Solu[QО]ip|Код проекта/i);
-  out.responsible = valueAfterLabel(/Руководитель проекта|\(РП\)|Ответственный/i);
-  out.codir       = valueAfterLabel(/Начальник РП|Начальник проекта|CODIR/i);
+  // Название ИС — БЕЗ метки «Описание ИС» (это раздел, а не поле)
+  out.is          = valueAfterLabel(/Название ИС|Наименование ИС|Name of.*system|IS name/i);
+  // SoluQiq / SoliQiq / Код проекта — срезаем префикс-метку из значения
+  out.solution    = valueAfterLabel(/Sol[uio]Qi[qp]|Код проекта|Код ИС/i)
+                      .replace(/^Sol[uio]Qi[qp]\s*[:\-]?\s*/i, '').trim();
+  out.responsible = valueAfterLabel(/Руководитель проекта|Ответственн|\(РП\)/i);
+  out.codir       = valueAfterLabel(/Начальник РП|Начальник проекта|Руководитель ИТ|CODIR/i);
+
+  // Фолбэк для SoluQiq: если ровно один код RU_APP_### во всём файле — берём его
+  if (!out.solution) {
+    const wholeText = allRows.map(r => r.join(' ')).join('\n');
+    const codes = [...new Set((wholeText.match(/\bRU_APP_\d+\b/gi) || []).map(s => s.toUpperCase()))];
+    if (codes.length === 1) out.solution = codes[0];
+  }
 
   out.rawHead = allRows.slice(0, 60);
   const raci = wb.Sheets['RACI'];
@@ -276,6 +308,7 @@ async function run(opts = {}, onProgress = () => {}) {
   // 2. Строим индекс IP → данные
   const index = new Map();
   let rfOk = 0, rfErr = 0;
+  const errLinks = [];
   for (let i = 0; i < rfLinks.length; i++) {
     const link = rfLinks[i];
     try {
@@ -300,6 +333,7 @@ async function run(opts = {}, onProgress = () => {}) {
       rfOk++;
     } catch (e) {
       rfErr++;
+      errLinks.push(link + '  (' + e.message.slice(0, 40) + ')');
     }
     prog(`🔧 Индексирую РФ: ${i + 1}/${rfLinks.length}\n   уникальных IP: ${index.size}, ошибок: ${rfErr}`);
   }
@@ -373,6 +407,7 @@ async function run(opts = {}, onProgress = () => {}) {
   const summary = [
     dryRun ? '✅ DRY-RUN завершён (без записи)' : '✅ Заполнение завершено',
     `РФ проиндексировано: ${rfOk} (ошибок: ${rfErr}), уникальных IP: ${index.size}`,
+    errLinks.length ? '⚠️ Не скачались РФ:\n  ' + errLinks.slice(0, 5).join('\n  ') : '',
     ...perSheet,
     `Строк обработано: ${totalRows}, заполнено: ${totalFilled}, IP не найден в РФ: ${notFound}`,
     savedPath ? `💾 Локально: ${savedPath}` : '',
