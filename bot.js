@@ -1439,7 +1439,7 @@ bot.onText(/\/start|\/help/, async (msg) => {
   text += 'Команды:\n/where — выбор папок\n/search — поиск\n/person — поиск по человеку\n' +
           '/insights — инсайты\n/analytics — аналитика\n/tasks — задачи\n' +
           '/digest — дайджест\n/contacts — контакты\n/favorites — избранное\n' +
-          '/last — последние события\n/rf — поиск по Request Form файлам\n/embcheck — проверка embedding/rerank\n/checktoken — проверить все токены\n/security — ИБ дайджест\n/pii — сканирование PII\n/classify <запрос> — классификация\n/audit — лог доступов\n/refresh — переиндексировать\n/sync — синхронизация\n' +
+          '/last — последние события\n/rf — поиск по Request Form файлам\n/fillrf — заполнить TESTing.xlsx по rf_list (с прогрессом)\n/embcheck — проверка embedding/rerank\n/checktoken — проверить все токены\n/security — ИБ дайджест\n/pii — сканирование PII\n/classify <запрос> — классификация\n/audit — лог доступов\n/refresh — переиндексировать\n/sync — синхронизация\n' +
           '/model — сменить LLM\n/usage — токены\n/clear — очистить диалог\n' +
           '🎤 Голосовое → транскрипция + поиск';
 
@@ -1615,6 +1615,60 @@ bot.onText(/\/rffill(?:\s+(\S+))?/, async (msg, match) => {
     );
   } catch (e) {
     await edit(msg.chat.id, sent.message_id, '❌ Ошибка запуска: ' + e.message);
+  }
+});
+
+// ── /fillrf — поиск IP по rf_list.xlsx и заполнение TESTing.xlsx (с прогрессом) ──
+//   /fillrf            — полный прогон (поиск + LLM + заливка на Диск)
+//   /fillrf dry        — тестовый прогон без записи
+//   /fillrf nollm      — только прямой парсинг, без LLM
+//   /fillrf noupload   — заполнить, но не заливать на Диск
+//   /fillrf inspect <ссылка РФ> — выгрузить структуру одного РФ-файла
+bot.onText(/\/fillrf(?:\s+([\s\S]+))?/, async (msg, match) => {
+  if (!checkAccess(msg.from.id)) return;
+  auditLog(msg.from.id, '/fillrf');
+  const args = (match[1] || '').trim();
+  let rflib;
+  try { rflib = require('./fill_from_rflist'); }
+  catch (e) { return reply(msg, '❌ Модуль fill_from_rflist недоступен (выполните npm install): ' + e.message.slice(0, 150)); }
+
+  // режим inspect — показать структуру одного РФ
+  if (/^inspect\b/i.test(args)) {
+    const link = args.replace(/^inspect\s*/i, '').trim();
+    if (!link) return reply(msg, 'Укажите ссылку: /fillrf inspect <ссылка на РФ>');
+    const sent = await reply(msg, '🔎 Загружаю структуру РФ...');
+    try {
+      const out = await rflib.inspectRf(link);
+      await edit(msg.chat.id, sent.message_id, out.slice(0, 4000));
+    } catch (e) {
+      await edit(msg.chat.id, sent.message_id, '❌ ' + e.message.slice(0, 300));
+    }
+    return;
+  }
+
+  const opts = {
+    dryRun:   /\bdry\b/i.test(args),
+    noLlm:    /\bnollm\b/i.test(args),
+    noUpload: /\bnoupload\b/i.test(args),
+  };
+  const sent = await reply(msg,
+    '⚙️ Запускаю заполнение TESTing.xlsx по rf_list.xlsx' +
+    (opts.dryRun ? ' (DRY-RUN)' : '') + '\nЭто может занять несколько минут...');
+
+  // троттлинг правок сообщения (Telegram не любит частые edit) — не чаще раза в ~2.5с
+  let lastEdit = 0;
+  const onProgress = (text) => {
+    const now = Date.now();
+    if (now - lastEdit < 2500) return;
+    lastEdit = now;
+    edit(msg.chat.id, sent.message_id, text.slice(0, 4000)).catch(() => {});
+  };
+
+  try {
+    const res = await rflib.run(opts, onProgress);
+    await edit(msg.chat.id, sent.message_id, res.summary.slice(0, 4000));
+  } catch (e) {
+    await edit(msg.chat.id, sent.message_id, '❌ Ошибка: ' + e.message.slice(0, 400));
   }
 });
 

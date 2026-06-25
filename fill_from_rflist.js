@@ -18,7 +18,11 @@
  *      (раскладка PUB DMZ и PRIVATE DMZ разная) и заполняем по индексу.
  *   4. Сохраняем TESTing_filled.xlsx (оригинал не трогаем) + опц. загрузка на Диск.
  *
- * Запуск:
+ * Использование как модуль (из бота):
+ *   const { run } = require('./fill_from_rflist');
+ *   const summary = await run({ dryRun, limit, noLlm, noUpload, multi }, onProgress);
+ *
+ * Запуск из CLI:
  *   node fill_from_rflist.js --inspect="<ссылка на РФ>"   # выгрузить структуру одного РФ
  *   node fill_from_rflist.js --dry-run --limit=20         # тест без записи
  *   node fill_from_rflist.js --no-llm                     # только прямой парсинг
@@ -34,22 +38,6 @@ const path  = require('path');
 const axios = require('axios');
 const XLSX  = require('xlsx');
 const cfg   = require('./config');
-
-// ── Параметры запуска ──
-const DRY_RUN   = process.argv.includes('--dry-run');
-const NO_LLM    = process.argv.includes('--no-llm');
-const NO_UPLOAD = process.argv.includes('--no-upload');
-const LIMIT     = parseInt((arg('--limit=') || '999999'), 10);
-const INSPECT   = arg('--inspect=');
-const TESTING_PATH = arg('--testing=') || '/00_Project_IS/TESTing.xlsx';
-const RFLIST_PATH  = arg('--rflist=')  || '/00_Project_IS/rf_list.xlsx';
-// IP может встретиться в нескольких РФ: 'first' — берём первый, 'all' — все ссылки через ;
-const MULTI = (arg('--multi=') || 'first');
-
-function arg(prefix) {
-  const a = process.argv.find(x => x.startsWith(prefix));
-  return a ? a.slice(prefix.length) : null;
-}
 
 // ── HTTP / Яндекс Диск ──
 // Точечное отключение проверки TLS только для внутренних эндпоинтов (корп. сертификаты)
@@ -93,7 +81,7 @@ async function uploadToDisk(diskPath, buffer) {
 // Чистим ссылку от эмодзи/пробелов/NBSP (в rf_list ссылки вида " 🔗 https://...")
 function cleanLink(s) {
   return String(s == null ? '' : s)
-    .replace(/ /g, ' ')
+    .replace(/ /g, ' ')
     .replace(/🔗/g, '')
     .trim();
 }
@@ -106,7 +94,7 @@ function sheetRows(ws) {
   return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
 }
 function normHeader(s) {
-  return String(s || '').replace(/ /g, ' ').trim().toLowerCase();
+  return String(s || '').replace(/ /g, ' ').trim().toLowerCase();
 }
 
 // Находим индексы колонок по заголовку (раскладка листов TESTing разная)
@@ -187,16 +175,11 @@ function indexRfFile(buffer) {
     return '';
   };
 
-  // Название ИС
-  out.is = valueAfterLabel(/Название ИС|Name of.*system|IS name|Описание ИС/i);
-  // SoluQiq / Код проекта
-  out.solution = valueAfterLabel(/Solu[QО]iq|Solu[QО]ip|Код проекта/i);
-  // Ответственный — «Руководитель проекта (РП)»
+  out.is          = valueAfterLabel(/Название ИС|Name of.*system|IS name|Описание ИС/i);
+  out.solution    = valueAfterLabel(/Solu[QО]iq|Solu[QО]ip|Код проекта/i);
   out.responsible = valueAfterLabel(/Руководитель проекта|\(РП\)|Ответственный/i);
-  // CODIR IT — «Начальник РП» / «Начальник проекта»
-  out.codir = valueAfterLabel(/Начальник РП|Начальник проекта|CODIR/i);
+  out.codir       = valueAfterLabel(/Начальник РП|Начальник проекта|CODIR/i);
 
-  // Сырьё для LLM-добора
   out.rawHead = allRows.slice(0, 60);
   const raci = wb.Sheets['RACI'];
   if (raci) out.rawRaci = sheetRows(raci).slice(0, 30);
@@ -210,7 +193,7 @@ function parseJsonAnswer(text) {
   return null;
 }
 async function askLLMMeta(rawHead, rawRaci) {
-  if (NO_LLM || !cfg.AUCHAN_BEARER) return null;
+  if (!cfg.AUCHAN_BEARER) return null;
   const headText = (rawHead || []).map(r => r.join(' | ')).join('\n').slice(0, 4000);
   const raciText = (rawRaci || []).map(r => r.join(' | ')).join('\n').slice(0, 3000);
   const prompt = `Это форма-заявка (Request form) на информационную систему. Из раздела «Описание ИС» извлеки данные.
@@ -235,41 +218,50 @@ ${raciText}
     const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
     return parseJsonAnswer(text);
   } catch (e) {
-    console.log('      (Auchan LLM недоступен: ' + e.message.slice(0, 40) + ')');
     return null;
   }
 }
 
-// ── Режим --inspect: выгрузить структуру одного РФ (чтобы свериться) ──
+// ── Режим inspect: выгрузить структуру одного РФ (чтобы свериться) ──
 async function inspectRf(link) {
-  console.log('🔎 Inspect РФ: ' + link + '\n');
+  const lines = ['🔎 Inspect РФ: ' + link, ''];
   const buf = await downloadFile(link);
   const wb  = XLSX.read(buf, { type: 'buffer' });
-  console.log('Листы: ' + wb.SheetNames.join(', ') + '\n');
+  lines.push('Листы: ' + wb.SheetNames.join(', '), '');
   for (const name of wb.SheetNames) {
     const rows = sheetRows(wb.Sheets[name]);
-    console.log(`=== Лист «${name}» (${rows.length} строк) ===`);
+    lines.push(`=== Лист «${name}» (${rows.length} строк) ===`);
     for (let r = 0; r < Math.min(rows.length, 25); r++) {
-      const cells = rows[r].map(c => String(c).replace(/ /g, ' ').slice(0, 22));
-      if (cells.some(c => c.trim())) console.log(`  [${r}] ` + JSON.stringify(cells));
+      const cells = rows[r].map(c => String(c).replace(/ /g, ' ').slice(0, 22));
+      if (cells.some(c => c.trim())) lines.push(`  [${r}] ` + JSON.stringify(cells));
     }
-    console.log('');
+    lines.push('');
   }
   const idx = indexRfFile(buf);
-  console.log('Найдено IP: ' + idx.ips.size);
-  console.log('Пример DNS: ' + [...idx.dnsByIp.entries()].slice(0, 5).map(([k, v]) => k + '→' + v).join(', '));
-  console.log('Метаданные: ИС="' + idx.is + '" Solu="' + idx.solution + '" Отв="' + idx.responsible + '" CODIR="' + idx.codir + '"');
+  lines.push('Найдено IP: ' + idx.ips.size);
+  lines.push('Пример DNS: ' + [...idx.dnsByIp.entries()].slice(0, 5).map(([k, v]) => k + '→' + v).join(', '));
+  lines.push(`Метаданные: ИС="${idx.is}" Solu="${idx.solution}" Отв="${idx.responsible}" CODIR="${idx.codir}"`);
+  return lines.join('\n');
 }
 
-// ── MAIN ──
-async function main() {
-  if (!cfg.YANDEX_DISK_TOKEN) { console.error('❌ YANDEX_DISK_TOKEN не задан в .env'); process.exit(1); }
+// ── Основной процесс (вызывается из бота и из CLI) ──
+// opts: { dryRun, limit, noLlm, noUpload, multi, testingPath, rflistPath }
+// onProgress(text): колбэк прогресса (необязательный)
+async function run(opts = {}, onProgress = () => {}) {
+  const {
+    dryRun = false, noLlm = false, noUpload = false,
+    limit = Infinity, multi = 'first',
+    testingPath = '/00_Project_IS/TESTing.xlsx',
+    rflistPath  = '/00_Project_IS/rf_list.xlsx',
+  } = opts;
 
-  if (INSPECT) { await inspectRf(INSPECT); return; }
+  if (!cfg.YANDEX_DISK_TOKEN) throw new Error('YANDEX_DISK_TOKEN не задан в .env');
+
+  const prog = (t) => { try { onProgress(t); } catch (_) {} };
 
   // 1. Список РФ-ссылок из rf_list.xlsx
-  console.log('📥 Читаю rf_list.xlsx: ' + RFLIST_PATH);
-  const rfListBuf = await downloadFile(RFLIST_PATH);
+  prog('📥 Читаю rf_list.xlsx...');
+  const rfListBuf = await downloadFile(rflistPath);
   const rfWb = XLSX.read(rfListBuf, { type: 'buffer' });
   const rfRows = sheetRows(rfWb.Sheets[rfWb.SheetNames[0]]);
   const rfLinks = [];
@@ -279,11 +271,10 @@ async function main() {
       if (/^https?:\/\//i.test(s) || s.startsWith('/')) { rfLinks.push(s); break; }
     }
   }
-  console.log('   РФ-файлов в списке: ' + rfLinks.length + '\n');
+  prog(`📋 РФ-файлов в списке: ${rfLinks.length}\n🔧 Индексирую...`);
 
-  // 2. Строим индекс IP → данные, перебирая РФ один раз
-  console.log('🔧 Индексирую РФ-файлы...');
-  const index = new Map();          // ip → { dns, is, solution, responsible, codir, link }
+  // 2. Строим индекс IP → данные
+  const index = new Map();
   let rfOk = 0, rfErr = 0;
   for (let i = 0; i < rfLinks.length; i++) {
     const link = rfLinks[i];
@@ -291,8 +282,7 @@ async function main() {
       const buf = await downloadFile(link);
       const idx = indexRfFile(buf);
 
-      // LLM добирает метаданные ИС, если прямой парсинг не нашёл
-      if (!idx.is || !idx.solution || !idx.responsible || !idx.codir) {
+      if (!noLlm && (!idx.is || !idx.solution || !idx.responsible || !idx.codir)) {
         const llm = await askLLMMeta(idx.rawHead, idx.rawRaci);
         if (llm) {
           idx.is          = idx.is          || llm.is          || '';
@@ -303,57 +293,45 @@ async function main() {
       }
 
       for (const ip of idx.ips) {
-        const rec = {
-          dns: idx.dnsByIp.get(ip) || '',
-          is: idx.is, solution: idx.solution,
-          responsible: idx.responsible, codir: idx.codir,
-          link,
-        };
+        const rec = { dns: idx.dnsByIp.get(ip) || '', is: idx.is, solution: idx.solution, responsible: idx.responsible, codir: idx.codir, link };
         if (!index.has(ip)) index.set(ip, [rec]);
         else index.get(ip).push(rec);
       }
       rfOk++;
-      console.log(`   [${i + 1}/${rfLinks.length}] ✅ ${idx.ips.size} IP — ${link.slice(0, 45)}`);
     } catch (e) {
       rfErr++;
-      console.log(`   [${i + 1}/${rfLinks.length}] ⚠️  ${e.message.slice(0, 50)} — ${link.slice(0, 40)}`);
     }
+    prog(`🔧 Индексирую РФ: ${i + 1}/${rfLinks.length}\n   уникальных IP: ${index.size}, ошибок: ${rfErr}`);
   }
-  console.log(`\n   Проиндексировано РФ: ${rfOk}, ошибок: ${rfErr}, уникальных IP: ${index.size}\n`);
 
   // 3. TESTing.xlsx — заполняем оба листа по заголовкам
-  console.log('📥 Читаю TESTing.xlsx: ' + TESTING_PATH);
-  const testBuf = await downloadFile(TESTING_PATH);
+  prog(`✅ Индекс готов: ${index.size} IP из ${rfOk} РФ.\n📥 Читаю TESTing.xlsx...`);
+  const testBuf = await downloadFile(testingPath);
   const testWb  = XLSX.read(testBuf, { type: 'buffer' });
 
   let totalFilled = 0, totalRows = 0, notFound = 0;
+  const perSheet = [];
 
   for (const sheetName of testWb.SheetNames) {
     const rows = sheetRows(testWb.Sheets[sheetName]);
     if (!rows.length) continue;
     const col = mapColumns(rows[0]);
-    if (col.ip < 0) { console.log(`   Лист «${sheetName}»: колонка IP не найдена — пропуск`); continue; }
-    console.log(`\n   Лист «${sheetName}» — колонки: ` + JSON.stringify(col));
+    if (col.ip < 0) { perSheet.push(`«${sheetName}»: нет колонки IP — пропуск`); continue; }
 
     let filled = 0;
-    for (let r = 1; r < rows.length && totalRows < LIMIT; r++) {
+    for (let r = 1; r < rows.length && totalRows < limit; r++) {
       const row = rows[r];
-      const ipCell = String(row[col.ip] || '');
-      const ips = (ipCell.match(IP_RE) || []);
+      const ips = (String(row[col.ip] || '').match(IP_RE) || []);
       if (!ips.length) continue;
       totalRows++;
 
-      // ищем первый IP строки, для которого есть данные в индексе
-      let recs = null, matchedIp = null;
-      for (const ip of ips) {
-        if (index.has(ip)) { recs = index.get(ip); matchedIp = ip; break; }
-      }
+      let recs = null;
+      for (const ip of ips) { if (index.has(ip)) { recs = index.get(ip); break; } }
       if (!recs) { notFound++; continue; }
 
       const rec = recs[0];
-      const links = MULTI === 'all' ? [...new Set(recs.map(x => x.link))].join(' ; ') : rec.link;
+      const links = multi === 'all' ? [...new Set(recs.map(x => x.link))].join(' ; ') : rec.link;
 
-      // Заполняем только пустые ячейки (не затираем уже заполненное)
       const setIf = (ci, val) => { if (ci >= 0 && val && !String(row[ci]).trim()) { row[ci] = val; return true; } return false; };
       let any = false;
       any = setIf(col.dns,         rec.dns)         || any;
@@ -366,40 +344,61 @@ async function main() {
       if (any) { filled++; totalFilled++; }
     }
 
-    // обновляем лист
-    if (!DRY_RUN) {
+    if (!dryRun) {
       const newSheet = XLSX.utils.aoa_to_sheet(rows);
       if (testWb.Sheets[sheetName]['!cols']) newSheet['!cols'] = testWb.Sheets[sheetName]['!cols'];
       testWb.Sheets[sheetName] = newSheet;
     }
-    console.log(`     заполнено строк: ${filled}`);
+    perSheet.push(`«${sheetName}»: заполнено ${filled}`);
+    prog(`📝 ${perSheet.join('\n')}`);
   }
 
-  console.log(`\n✅ Итог: строк обработано ${totalRows}, заполнено ${totalFilled}, IP не найден в РФ: ${notFound}`);
-
-  if (DRY_RUN) { console.log('\n⚠️  DRY-RUN — файл не сохранён'); return; }
-  if (!totalFilled) { console.log('Нечего сохранять.'); return; }
-
   // 4. Сохранение
-  const outBuffer = XLSX.write(testWb, { type: 'buffer', bookType: 'xlsx' });
-  const localPath = path.join(process.cwd(), 'TESTing_filled.xlsx');
-  fs.writeFileSync(localPath, outBuffer);
-  console.log('💾 Локально: ' + localPath);
+  let savedPath = '', uploaded = false, uploadPath = '';
+  if (!dryRun && totalFilled) {
+    const outBuffer = XLSX.write(testWb, { type: 'buffer', bookType: 'xlsx' });
+    savedPath = path.join(process.cwd(), 'TESTing_filled.xlsx');
+    fs.writeFileSync(savedPath, outBuffer);
 
-  if (!NO_UPLOAD) {
-    const uploadPath = TESTING_PATH.replace(/\.xlsx$/, '_filled.xlsx');
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await uploadToDisk(uploadPath, outBuffer);
-        console.log('📤 Загружено на Диск: ' + uploadPath);
-        break;
-      } catch (e) {
-        const st = e.response && e.response.status;
-        console.log(`   ⚠️  Загрузка не удалась (${st || e.message.slice(0, 30)}), попытка ${attempt}/3`);
-        if (attempt < 3) await new Promise(r => setTimeout(r, 5000));
+    if (!noUpload) {
+      uploadPath = testingPath.replace(/\.xlsx$/, '_filled.xlsx');
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try { await uploadToDisk(uploadPath, outBuffer); uploaded = true; break; }
+        catch (e) { if (attempt < 3) await new Promise(r => setTimeout(r, 5000)); }
       }
     }
   }
+
+  // Итоговый отчёт
+  const summary = [
+    dryRun ? '✅ DRY-RUN завершён (без записи)' : '✅ Заполнение завершено',
+    `РФ проиндексировано: ${rfOk} (ошибок: ${rfErr}), уникальных IP: ${index.size}`,
+    ...perSheet,
+    `Строк обработано: ${totalRows}, заполнено: ${totalFilled}, IP не найден в РФ: ${notFound}`,
+    savedPath ? `💾 Локально: ${savedPath}` : '',
+    uploaded ? `📤 Загружено на Диск: ${uploadPath}` : (savedPath && !noUpload ? '⚠️ На Диск не загружено (см. логи)' : ''),
+  ].filter(Boolean).join('\n');
+
+  return { summary, totalFilled, totalRows, notFound, indexedIps: index.size, rfOk, rfErr };
 }
 
-main().catch(e => { console.error('Fatal:', e.message); process.exit(1); });
+module.exports = { run, inspectRf, indexRfFile, mapColumns, downloadFile };
+
+// ── CLI ──
+if (require.main === module) {
+  const arg = (prefix) => { const a = process.argv.find(x => x.startsWith(prefix)); return a ? a.slice(prefix.length) : null; };
+  const INSPECT = arg('--inspect=');
+  (async () => {
+    if (INSPECT) { console.log(await inspectRf(INSPECT)); return; }
+    const res = await run({
+      dryRun:   process.argv.includes('--dry-run'),
+      noLlm:    process.argv.includes('--no-llm'),
+      noUpload: process.argv.includes('--no-upload'),
+      limit:    parseInt(arg('--limit=') || '999999', 10),
+      multi:    arg('--multi=') || 'first',
+      testingPath: arg('--testing=') || '/00_Project_IS/TESTing.xlsx',
+      rflistPath:  arg('--rflist=')  || '/00_Project_IS/rf_list.xlsx',
+    }, (t) => console.log(t.split('\n')[0]));
+    console.log('\n' + res.summary);
+  })().catch(e => { console.error('Fatal:', e.message); process.exit(1); });
+}
