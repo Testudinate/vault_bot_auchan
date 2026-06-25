@@ -1,0 +1,52 @@
+# ── Секреты и окружение ───────────────────────
+.env
+.env.*
+!env.template
+*.pem
+*.key
+
+# ── Логи ──────────────────────────────────────
+*.log
+logs/
+
+# ── Данные / выгрузки (могут содержать ПД) ────
+*.csv
+*.xlsx
+*.xls
+
+# ── Состояние бота / синхронизации ────────────
+.vault_state.json
+.disk_sync_state.json
+.visibility_settings.json
+*state*.json
+.vectra_index/
+.vault_index/
+.chroma/
+
+# ── База знаний (личные данные) ───────────────
+ObsidianVault/
+plaud_transcripts/
+messenger_export/
+yandex_disk_files/
+
+# ── Node ──────────────────────────────────────
+node_modules/
+npm-debug.log*
+
+# ── Python ────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# ── Резервные копии / временные ───────────────
+*.bak
+*.tmp
+*~
+* (2).*
+*_______*.js
+
+# ── OS ────────────────────────────────────────
+.DS_Store
+Thumbs.db
