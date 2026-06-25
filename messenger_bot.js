@@ -579,6 +579,7 @@ function mainMenuText() {
     '/processes         — классификация по процессам',
     '/duplicates        — дубликаты документов',
     '/rf                — поиск по Request Form файлам',
+    '/fillrf            — заполнить TESTing.xlsx по rf_list (с прогрессом)',
     '/embcheck          — проверка embedding/rerank',
     '/heatmap           — тепловая карта активности',
     '/trend             — тренд ИБ инцидентов',
@@ -1637,6 +1638,50 @@ async function handleCommand(cmd, chatId, text) {
 
 
       } catch (e) { return 'Ошибка: '+e.message; }
+    }
+
+    case '/fillrf': {
+      // Поиск IP по rf_list.xlsx и заполнение TESTing.xlsx (с прогрессом)
+      //   /fillrf            — полный прогон (поиск + LLM + заливка на Диск)
+      //   /fillrf dry        — без записи
+      //   /fillrf nollm      — без LLM
+      //   /fillrf noupload   — не заливать на Диск
+      //   /fillrf inspect <ссылка> — структура одного РФ
+      let rflib;
+      try { rflib = require('./fill_from_rflist'); }
+      catch (e) { return 'Модуль fill_from_rflist недоступен (выполните npm install): ' + e.message.slice(0, 150); }
+
+      if (/^inspect\b/i.test(args)) {
+        const link = args.replace(/^inspect\s*/i, '').trim();
+        if (!link) return 'Укажите ссылку: /fillrf inspect <ссылка на РФ>';
+        await sendMessage(chatId, 'Загружаю структуру РФ...');
+        try { return await rflib.inspectRf(link); }
+        catch (e) { return 'Ошибка: ' + e.message.slice(0, 300); }
+      }
+
+      const opts = {
+        dryRun:   /\bdry\b/i.test(args),
+        noLlm:    /\bnollm\b/i.test(args),
+        noUpload: /\bnoupload\b/i.test(args),
+      };
+      await sendMessage(chatId, '⚙️ Запускаю заполнение TESTing.xlsx по rf_list.xlsx' +
+        (opts.dryRun ? ' (DRY-RUN)' : '') + '\nЭто может занять несколько минут...');
+
+      // Я.Мессенджер не умеет править сообщения — прогресс шлём новыми сообщениями не чаще раза в 15с
+      let lastSent = Date.now();
+      const onProgress = (t) => {
+        const now = Date.now();
+        if (now - lastSent < 15000) return;
+        lastSent = now;
+        sendMessage(chatId, t).catch(() => {});
+      };
+
+      try {
+        const res = await rflib.run(opts, onProgress);
+        return res.summary;
+      } catch (e) {
+        return 'Ошибка: ' + e.message.slice(0, 400);
+      }
     }
 
     case '/rf': {
