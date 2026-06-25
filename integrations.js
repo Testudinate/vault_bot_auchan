@@ -24,6 +24,12 @@ const agent = new (require('https').Agent)({
   keepAlive:          false,
 });
 
+// Экранирование пользовательского ввода для CQL/JQL (защита от инъекций):
+// внутри строки в кавычках спецсимволы — обратный слеш и двойная кавычка.
+function escCQL(s) {
+  return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 // ──────────────────────────────────────────────
 //  CONFLUENCE
 // ──────────────────────────────────────────────
@@ -35,7 +41,7 @@ class Confluence {
     }
     this.ax = axios.create({
       baseURL:    `${cfg.CONFLUENCE_URL.replace(/\/$/, '')}/rest/api`,
-      auth:       { username: cfg.CONFLUENCE_USER, password: cfg.CONFLUENCE_TOKEN },
+      auth:       { username: cfg.CONFLUENCE_USER, password: cfg.CONFLUENCE_PASSWORD },
       httpsAgent: agent,
       timeout:    30000,
       headers:    { 'Content-Type': 'application/json' },
@@ -91,7 +97,7 @@ class Confluence {
   async searchPages(query, limit = 10) {
     const { data } = await this.ax.get('/content/search', {
       params: {
-        cql:    `space="${cfg.CONFLUENCE_SPACE}" AND text ~ "${query}"`,
+        cql:    `space="${escCQL(cfg.CONFLUENCE_SPACE)}" AND text ~ "${escCQL(query)}"`,
         limit,
         expand: 'metadata.labels',
       },
@@ -244,15 +250,15 @@ class JIRA {
 
   // Мои задачи
   async getMyIssues(status = 'In Progress') {
-    const jql = `assignee = currentUser() AND status = "${status}" ORDER BY updated DESC`;
+    const jql = `assignee = currentUser() AND status = "${escCQL(status)}" ORDER BY updated DESC`;
     return this.searchIssues(jql, 15);
   }
 
   // Задачи проекта
   async getProjectIssues(project = null, status = null) {
     const proj = project || cfg.JIRA_PROJECT;
-    let jql    = `project = "${proj}"`;
-    if (status) jql += ` AND status = "${status}"`;
+    let jql    = `project = "${escCQL(proj)}"`;
+    if (status) jql += ` AND status = "${escCQL(status)}"`;
     jql += ' ORDER BY updated DESC';
     return this.searchIssues(jql, 15);
   }

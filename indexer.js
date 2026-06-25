@@ -110,7 +110,9 @@ function parseTimeExpression(text) {
   // «за март», «в марте»
   if (!dateFrom) {
     for (const [prefix, monthIdx] of Object.entries(monthMap)) {
-      const re = new RegExp('(?:за|в|во)\\s+' + prefix + '[а-яёa-z]*', 'i');
+      // только короткое падежное окончание и слово не продолжается буквами,
+      // иначе «ма» ловило бы «маркетинг»/«матрица» как май
+      const re = new RegExp('(?:за|в|во)\\s+' + prefix + '[а-яёa-z]{0,3}(?![а-яёa-z])', 'i');
       if (re.test(lower)) {
         const year = monthIdx <= now.getMonth() ? now.getFullYear() : now.getFullYear() - 1;
         dateFrom   = new Date(year, monthIdx, 1);

@@ -157,7 +157,13 @@ function getGraph() {
 const anthropic = new Anthropic({ apiKey: cfg.ANTHROPIC_KEY });
 
 function checkAccess(uid) {
-  return cfg.ALLOWED_USER_ID === 0 || uid === cfg.ALLOWED_USER_ID;
+  // fail-closed: если ALLOWED_USER_ID не задан (0) — доступ запрещён всем,
+  // иначе бот с доступом к почте/PII/JIRA был бы открыт любому пользователю Telegram
+  if (!cfg.ALLOWED_USER_ID) {
+    log.warn('checkAccess: ALLOWED_USER_ID не задан в .env — доступ запрещён. Укажите свой Telegram ID.');
+    return false;
+  }
+  return uid === cfg.ALLOWED_USER_ID;
 }
 
 // ──────────────────────────────────────────────
@@ -339,15 +345,10 @@ async function multiHopRag(question, { uid = 0, docType = null, folders = null }
       const docs = await vaultIndex.searchHybrid(cleaned || sq, { topK: 3, docType, folders, dateFrom, dateTo });
       const ctx  = formatContext(docs, 1000);
       const ans = await callLLM([{ role:'user', content:'Ответь кратко:\n'+sq+'\n\nДокументы:\n'+ctx }], { maxTokens:200, uid });
-
-
-
-
-
-
-
-
-    } catch (_) {}
+      subAnswers.push({ q: sq, a: ans });
+    } catch (e) {
+      log.warn('multiHopRag: под-вопрос пропущен: ' + e.message);
+    }
   }
 
   // Шаг 3: объединить ответы в финальный
@@ -413,6 +414,10 @@ function getSystemPrompt(lang) {
 }
 
 async function ragAsk(question, { uid = 0, docType = null, folders = null } = {}) {
+  // Guardrails: блокируем запретные темы до обработки
+  const guard = guardrails.checkInput(question);
+  if (guard.block) return guard.message;
+
   const { dateFrom, dateTo, cleaned } = parseTimeExpression(question);
 
   // Query expansion
@@ -482,14 +487,22 @@ async function ragAsk(question, { uid = 0, docType = null, folders = null } = {}
   const history  = getDialog(uid);
   const dateNote = dateFrom ? `\n[Период: ${dateFrom.toLocaleDateString('ru')} — ${(dateTo||new Date()).toLocaleDateString('ru')}]` : '';
 
-  const answer = await callLLM(
+  let answer = await callLLM(
     [...history, { role: 'user', content: `Вопрос: ${question}${dateNote}\n\nДокументы:\n${context}` }],
     {
-      system:    getSystemPrompt(detectLanguage(question)),
+      // Guardrails: системный промпт с правилами против галлюцинаций
+      system:    guardrails.getGuardrailSystem(getSystemPrompt(detectLanguage(question))),
       maxTokens: 800,
       uid,
     }
   );
+
+  // Guardrails: детектор галлюцинаций + дисклеймер для чисел без источников
+  if (guardrails.looksLikeHallucination(answer, topDocs.length)) {
+    answer = '⚠️ В базе знаний нет точной информации по этому вопросу.\n\n' + answer;
+  }
+  answer = guardrails.checkOutput(answer, topDocs.length > 0);
+  if (guard.note) answer += '\n\nℹ️ ' + guard.note;
 
   addToDialog(uid, 'user', question);
   addToDialog(uid, 'assistant', answer);
@@ -2032,8 +2045,9 @@ bot.onText(/\/jira(.*)/, async (msg, match) => {
       await edit(msg.chat.id, sent.message_id, text.slice(0,4000));
 
     } else {
-      // /jira search запрос
-      const issues = await jira.searchIssues(`project = "${cfg.JIRA_PROJECT}" AND text ~ "${args}" ORDER BY updated DESC`, 10);
+      // /jira search запрос — зачищаем ввод от спецсимволов JQL (защита от инъекции)
+      const safeArgs = args.replace(/[^а-яёa-z0-9 ]/gi, ' ').trim().split(/\s+/).slice(0, 6).join(' ');
+      const issues = await jira.searchIssues(`project = "${cfg.JIRA_PROJECT}" AND text ~ "${safeArgs}" ORDER BY updated DESC`, 10);
       if (!issues.length) { await edit(msg.chat.id, sent.message_id, `🔍 Не найдено: ${args}`); return; }
       let text = `🔍 JIRA: ${args}\n\n`;
       for (const i of issues)
@@ -2418,6 +2432,7 @@ bot.on('message', async (msg) => {
   const dt   = filt.types.length === 1 ? filt.types[0] : null;
   auditLog(msg.from.id, 'ask', msg.text);
   const sent = await reply(msg, '🤔 Ищу в базе знаний...');
+  const useMultiHop = needsMultiHop(msg.text);
   try {
     const answer = useMultiHop
       ? await multiHopRag(msg.text, { uid: msg.from.id, docType: dt, folders: filt.folders })
@@ -2435,6 +2450,14 @@ bot.on('message', async (msg) => {
 bot.on('callback_query', async (query) => {
   const data = query.data;
   const uid  = query.from.id;
+  // контроль доступа — кнопки выполняют привилегированные действия (sync, pii, токены)
+  if (!checkAccess(uid)) {
+    return bot.answerCallbackQuery(query.id, { text: '⛔ Нет доступа' });
+  }
+  // query.message может отсутствовать для очень старых сообщений
+  if (!query.message) {
+    return bot.answerCallbackQuery(query.id, { text: 'Сообщение недоступно' });
+  }
   const cid  = query.message.chat.id;
   const mid  = query.message.message_id;
   await bot.answerCallbackQuery(query.id);
