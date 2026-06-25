@@ -1,0 +1,31 @@
+{"ts":"2026-05-25T13:48:18.148Z","uid":275071386,"action":"ask","detail":"Сообщения за сегодня с деталями и названием чатов"}
+{"ts":"2026-05-25T13:52:01.221Z","uid":275071386,"action":"/security","detail":""}
+{"ts":"2026-05-25T13:52:33.266Z","uid":275071386,"action":"/security","detail":""}
+{"ts":"2026-05-25T13:52:49.653Z","uid":275071386,"action":"/pii","detail":""}
+{"ts":"2026-05-25T13:53:55.301Z","uid":275071386,"action":"/classify","detail":"СЕКРЕТНО"}
+{"ts":"2026-05-25T13:54:20.473Z","uid":275071386,"action":"/security","detail":""}
+{"ts":"2026-05-25T13:54:37.000Z","uid":275071386,"action":"/audit","detail":""}
+{"ts":"2026-05-25T13:54:56.677Z","uid":275071386,"action":"ask","detail":"Скан PII"}
+{"ts":"2026-05-25T13:55:12.951Z","uid":275071386,"action":"ask","detail":"ИБ Дайджест"}
+{"ts":"2026-05-25T14:07:18.839Z","uid":275071386,"action":"/security","detail":""}
+{"ts":"2026-05-25T14:07:35.855Z","uid":275071386,"action":"/pii","detail":""}
+{"ts":"2026-05-25T14:09:32.621Z","uid":275071386,"action":"ask","detail":"Сообщение в чате"}
+{"ts":"2026-05-25T14:22:13.238Z","uid":275071386,"action":"ask","detail":"последнее сообщение от bigdata бота"}
+{"ts":"2026-05-25T14:29:04.431Z","uid":275071386,"action":"/checktoken","detail":""}
+{"ts":"2026-05-25T14:31:10.854Z","uid":275071386,"action":"/checktoken","detail":""}
+{"ts":"2026-05-25T16:04:09.657Z","uid":275071386,"action":"/pii","detail":""}
+{"ts":"2026-05-26T11:14:02.293Z","uid":275071386,"action":"ask","detail":"последнее сообщение в мессенджере"}
+{"ts":"2026-05-26T11:33:14.031Z","uid":275071386,"action":"ask","detail":"test"}
+{"ts":"2026-05-26T11:49:02.159Z","uid":275071386,"action":"/checktoken","detail":""}
+{"ts":"2026-05-26T11:56:11.973Z","uid":275071386,"action":"checktoken_cb","detail":""}
+{"ts":"2026-05-26T12:10:57.111Z","uid":275071386,"action":"pii_scan","detail":""}
+{"ts":"2026-05-26T12:24:51.351Z","uid":275071386,"action":"ask","detail":"1708_DM_DAR_Add_Product_Characteristic"}
+{"ts":"2026-05-26T12:24:51.635Z","uid":275071386,"action":"ask","detail":"1708_DM_DAR_Add_Product_Characteristic"}
+{"ts":"2026-05-26T12:24:51.672Z","uid":275071386,"action":"ask","detail":"1708_DM_DAR_Add_Product_Characteristic"}
+{"ts":"2026-05-26T12:25:22.272Z","uid":275071386,"action":"ask","detail":"Найти информацию в письмо с метро  \n1708_DM_DAR_Add_Product_Characteristic"}
+{"ts":"2026-05-26T12:28:42.651Z","uid":275071386,"action":"security_cb","detail":""}
+{"ts":"2026-05-26T12:28:46.203Z","uid":275071386,"action":"security_cb","detail":""}
+{"ts":"2026-05-26T12:33:02.754Z","uid":275071386,"action":"/security","detail":""}
+{"ts":"2026-05-26T12:33:02.935Z","uid":275071386,"action":"/security","detail":""}
+{"ts":"2026-05-26T12:33:29.312Z","uid":275071386,"action":"ask","detail":"О чем я общался со Светланой на прошлой неделе"}
+{"ts":"2026-05-26T12:34:15.958Z","uid":275071386,"action":"ask","detail":"О чем я общался со Светланой на прошлой неделе"}
